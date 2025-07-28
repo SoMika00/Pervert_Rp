@@ -1,0 +1,1138 @@
+==================== FICHIER : ./.dockerignore ====================
+
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+.venv/
+env/
+venv/
+.env
+.git
+.pytest_cache/
+.vscode/
+
+
+
+==================== FICHIER : ./README.md ====================
+
+# ThinkingThoughts 🧠💬
+
+![Docker](https://img.shields.io/badge/Docker-Ready-blue)
+![FastAPI](https://img.shields.io/badge/FastAPI-Async%20100%25-green)
+![Streamlit](https://img.shields.io/badge/Streamlit-UI-red)
+
+> **Boîte à outils prête à l’emploi pour concevoir, tester et déployer des applications LLM basées sur vLLM, FastAPI et Streamlit.**
+>
+> * **2 commandes** pour lancer l’ensemble (Docker Compose)
+> * **Streaming temps‑réel** des tokens
+> * **Stateless**  : scale horizontal immédiat
+> * API **OpenAI‑compatible** : swap‐in / swap‐out d’un vrai compte OpenAI sans changer une ligne de code
+
+---
+
+## Table des matières
+
+* [1. Présentation](#1-présentation)
+* [2. Démarrage rapide](#2-démarrage-rapide)
+* [3. Architecture](#3-architecture)
+* [4. Configuration détaillée](#4-configuration-détaillée)
+* [5. Utilisation de l’API](#5-utilisation-de-lapi)
+* [6. Déploiement en production](#6-déploiement-en-production)
+* [7. FAQ & Dépannage](#7-faq--dépannage)
+
+---
+
+## 1. Présentation
+
+ThinkingThoughts propose un **starter‑kit micro‑services** destiné aux data‑scientists et développeurs désirant :
+
+1. Itérer rapidement sur des prototypes LLM (prompt engineering, RAG, etc.).
+2. Tester localement un modèle **open‑source** via [vLLM](https://github.com/vllm-project/vllm) avant de basculer si besoin vers l’API OpenAI.
+3. Déployer en un clic sur un cloud ou un cluster on‑prem.
+
+<details>
+<summary>🌟 Fonctionnalités majeures</summary>
+
+| Domaine         | Détails                                                                   |
+| --------------- | ------------------------------------------------------------------------- |
+| **Backend**     | FastAPI 100 % asynchrone (`httpx.AsyncClient`), CORS, OpenTelemetry hooks |
+| **LLM Service** | vLLM 0.4 avec support du streaming & batching                             |
+| **Frontend**    | Streamlit (UI chat, selection de modèle, temperature slider, historique)  |
+| **Persistance** | Sessions stockées dans PG pour garantir la tolérance aux pannes        |
+| **CI / CD**     | Exemple de pipeline GitHub Actions (lint → test → build image)            |
+
+</details>
+
+---
+
+## 2. Démarrage rapide
+
+> **Pré‑requis :** Docker ≥ 25 et Docker Compose v2.
+
+```bash
+# Clone
+$ git clone https://github.com/<you>/thinking-thoughts.git
+$ cd thinking-thoughts
+
+# Configuration (copier puis adapter .env)
+$ cp .env.sample .env
+
+# Lancement
+$ docker compose up --build -d
+
+# Interface Web
+$ open http://localhost:8501
+```
+
+🛠 **Astuce :** `docker compose logs -f backend` pour suivre les requêtes.
+
+---
+
+## 3. Architecture
+
+```
+┌────────────┐   WebSockets    ┌────────────┐   HTTP/JSON    ┌──────────────┐
+│ Streamlit  │ — — — — — — —▶ │  FastAPI   │ — — — — — — —▶ │     vLLM      │
+│   UI       │                │  Backend   │               │  Service      │
+└────────────┘                └────────────┘               └──────────────┘
+        ▲                            │                          ▲
+        │                            ▼                          │
+        └────────── SQL (chat history) ◀──────────────────────┘
+```
+
+* **Streamlit** : chat en temps‑réel (streaming), gestion de l’API Key, choix du modèle.
+* **FastAPI** : authentification, throttling, app logic.
+* **vLLM** : serveur GPU optimisé (paginated KV‑cache, speculative decoding…).
+
+---
+
+## 4. Configuration détaillée
+
+Toutes les variables sont centralisées dans `.env` et chargées via **pydantic‑settings**.
+
+| Variable                  | Description                | Exemple                                |
+| ------------------------- | -------------------------- | -------------------------------------- |
+| `VLLM_API_BASE_URL`       | URL du service vLLM        | `http://vllm:8000`                     |
+| `VLLM_MODEL_NAME`         | Modèle à charger           | `mistralai/Mixtral-8x7B-Instruct-v0.1` |
+| `STREAMLIT_AUTH_REQUIRED` | Bloquer la UI sans API Key | `true`                                 |
+| `MAX_TOKENS`              | Limite par réponse         | `512`                                  |
+
+### Changer de modèle
+
+```bash
+# .env
+VLLM_MODEL_NAME=microsoft/Phi-3-mini-4k-instruct
+```
+
+Redémarrez simplement le service `vllm` (`docker compose restart vllm`).
+
+### Déployer sur GPU ⚡️
+
+```yaml
+services:
+  vllm:
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - capabilities: [gpu]
+```
+
+---
+
+## 5. Utilisation de l’API
+
+### Endpoint principal
+
+```http
+POST /api/chat HTTP/1.1
+Content-Type: application/json
+x-api-key: <YOUR_KEY>
+
+{
+  "session_id": "d5bc…",
+  "messages": [
+    {"role": "user", "content": "Explique FastAPI en 3 points"}
+  ],
+  "stream": false
+}
+```
+
+Réponse :
+
+```json
+{
+  "assistant": "1. FastAPI est un framework Python…"
+}
+```
+
+
+
+### Autres endpoints
+
+| Verbe / Route  | Rôle                        |
+| -------------- | --------------------------- |
+| `GET /health`  | Liveness / readiness probes |
+| `GET /metrics` | Prometheus export           |
+
+---
+
+## 6. Déploiement en production
+
+* **Docker Swarm** : stack.yml fourni (`docker stack deploy -c stack.yml thinking`)
+* **Kubernetes** : manifest exemples dans `k8s/` (ingress + HPA autoscale).
+* **Traefik** : TLS certificates + auth middleware prêt à l’emploi.
+* **Observabilité** : intégration Grafana + Loki (logs) et Prometheus (metrics).
+
+### Benchmark
+
+```bash
+$ wrk -t4 -c32 -d30s -s scripts/wrk_chat.lua http://localhost:8000/api/chat
+```
+
+---
+
+## 7. FAQ & Dépannage
+
+<details>
+<summary>Le service vLLM consomme trop de mémoire ?</summary>
+
+* Réduisez `VLLM_MAX_NUM_SEQS` ou passez à un modèle plus petit.
+* Activez l’option `swap_memory=True` si votre GPU le permet.
+
+</details>
+
+<details>
+<summary>Je reçois 502 Bad Gateway lors du streaming ?</summary>
+
+Assurez‑vous que votre reverse‑proxy (Traefik, Nginx) laisse passer les connexions HTTP SSE sans timeout (<code>proxy\_read\_timeout 3600s</code>).
+
+</details>
+
+
+
+<sub>MIT © 2025 michail alberjaoui — « Maintenir l’équilibre entre l’ordre et le chaos » 🧘‍♂️</sub>
+
+
+
+==================== FICHIER : ./docker-compose.yml ====================
+
+# Fichier : docker-compose.yml (mis à jour)
+
+version: '3.8'
+
+services:
+  qdrant:
+    image: qdrant/qdrant:latest
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - ./qdrant_storage:/qdrant/storage
+    restart: on-failure
+
+  vllm:
+    build:
+      context: .
+      dockerfile: vllm.Dockerfile
+    runtime: nvidia
+    volumes:
+      - /scratch/hf_cache:/root/.cache/huggingface/hub
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    command:
+      - --host
+      - 0.0.0.0
+      - --model
+      - huihui-ai/qwen2.5-32B-Instruct-abliterated
+      - --max-model-len
+      - '4096'
+      - --gpu-memory-utilization
+      - '0.90'
+    ports:
+      - "8000:8000"
+    restart: on-failure
+
+  backend:
+    build:
+      context: ./backend
+    depends_on:
+      - vllm
+      - qdrant # On ajoute la dépendance
+    ports:
+      - "8001:8001"
+    volumes:
+      - ./backend/src:/app/src
+    env_file:
+      - ./backend/.env # On va utiliser un fichier .env pour les secrets
+    environment:
+      - VLLM_API_BASE_URL=http://vllm:8000/v1
+      - VLLM_MODEL_NAME=huihui-ai/qwen2.5-32B-Instruct-abliterated
+      - QDRANT_URL=http://qdrant:6333 # Prêt pour le futur
+    restart: on-failure
+
+  frontend:
+    build:
+      context: ./frontend
+    depends_on:
+      - backend
+    ports:
+      - "8501:8501"
+    environment:
+      - STREAMLIT_BACKEND_API_URL=http://backend:8001/api/v1/chat/
+    restart: on-failure
+
+
+==================== FICHIER : ./vllm.Dockerfile ====================
+
+# Utiliser une image de base NVIDIA CUDA avec les outils de développement
+FROM nvidia/cuda:12.1.1-devel-ubuntu22.04
+
+# Installer les dépendances système de base et Python
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y \
+    python3.10 \
+    python3-pip \
+    git \
+    && rm -rf /var/lib/apt/lists/*
+
+# Définir le répertoire de travail
+WORKDIR /app
+
+# Copier le fichier des dépendances que nous avons généré
+COPY vllm.requirements.txt .
+
+# Installer toutes les dépendances Python de votre environnement (vision)
+# Ceci est l'étape la plus importante
+RUN pip3 install -r vllm.requirements.txt
+
+# Exposer le port sur lequel VLLM va écouter
+EXPOSE 8000
+
+# La commande par défaut pour lancer le serveur.
+# Notez que les arguments comme le modèle, etc., seront passés depuis docker-compose.yml
+ENTRYPOINT ["python3", "-m", "vllm.entrypoints.openai.api_server"]
+
+
+==================== FICHIER : ./vllm.requirements.txt ====================
+
+aiohappyeyeballs==2.6.1
+aiohttp==3.12.14
+aiosignal==1.4.0
+airportsdata==20250706
+annotated-types==0.7.0
+anyio==4.9.0
+astor==0.8.1
+async-timeout==5.0.1
+attrs==25.3.0
+bitsandbytes==0.46.1
+blake3==1.0.5
+cachetools==6.1.0
+certifi==2025.7.14
+charset-normalizer==3.4.2
+click==8.2.1
+cloudpickle==3.1.1
+compressed-tensors==0.10.2
+cupy-cuda12x==13.5.1
+depyf==0.18.0
+dill==0.4.0
+diskcache==5.6.3
+distro==1.9.0
+dnspython==2.7.0
+einops==0.8.1
+email_validator==2.2.0
+exceptiongroup==1.3.0
+fastapi==0.116.1
+fastapi-cli==0.0.8
+fastapi-cloud-cli==0.1.4
+fastrlock==0.8.3
+filelock==3.18.0
+frozenlist==1.7.0
+fsspec==2025.7.0
+gguf==0.17.1
+h11==0.16.0
+hf-xet==1.1.5
+httpcore==1.0.9
+httptools==0.6.4
+httpx==0.28.1
+huggingface-hub==0.33.4
+idna==3.10
+interegular==0.3.3
+Jinja2==3.1.6
+jiter==0.10.0
+jsonschema==4.25.0
+jsonschema-specifications==2025.4.1
+lark==1.2.2
+llguidance==0.7.30
+llvmlite==0.44.0
+lm-format-enforcer==0.10.11
+markdown-it-py==3.0.0
+MarkupSafe==3.0.2
+mdurl==0.1.2
+mistral_common==1.8.1
+mpmath==1.3.0
+msgpack==1.1.1
+msgspec==0.19.0
+multidict==6.6.3
+nest-asyncio==1.6.0
+networkx==3.4.2
+ninja==1.11.1.4
+numba==0.61.2
+numpy==2.2.6
+nvidia-cublas-cu12==12.6.4.1
+nvidia-cuda-cupti-cu12==12.6.80
+nvidia-cuda-nvrtc-cu12==12.6.77
+nvidia-cuda-runtime-cu12==12.6.77
+nvidia-cudnn-cu12==9.5.1.17
+nvidia-cufft-cu12==11.3.0.4
+nvidia-cufile-cu12==1.11.1.6
+nvidia-curand-cu12==10.3.7.77
+nvidia-cusolver-cu12==11.7.1.2
+nvidia-cusparse-cu12==12.5.4.2
+nvidia-cusparselt-cu12==0.6.3
+nvidia-nccl-cu12==2.26.2
+nvidia-nvjitlink-cu12==12.6.85
+nvidia-nvtx-cu12==12.6.77
+openai==1.90.0
+opencv-python-headless==4.12.0.88
+outlines==0.1.11
+outlines_core==0.1.26
+packaging==25.0
+partial-json-parser==0.2.1.1.post6
+pillow==11.3.0
+prometheus-fastapi-instrumentator==7.1.0
+prometheus_client==0.22.1
+propcache==0.3.2
+protobuf==6.31.1
+psutil==7.0.0
+py-cpuinfo==9.0.0
+pybase64==1.4.1
+pycountry==24.6.1
+pydantic==2.11.7
+pydantic-extra-types==2.10.5
+pydantic_core==2.33.2
+Pygments==2.19.2
+python-dotenv==1.1.1
+python-json-logger==3.3.0
+python-multipart==0.0.20
+PyYAML==6.0.2
+pyzmq==27.0.0
+ray==2.48.0
+referencing==0.36.2
+regex==2024.11.6
+requests==2.32.4
+rich==14.0.0
+rich-toolkit==0.14.8
+rignore==0.6.2
+rpds-py==0.26.0
+safetensors==0.5.3
+scipy==1.15.3
+sentencepiece==0.2.0
+sentry-sdk==2.33.0
+shellingham==1.5.4
+sniffio==1.3.1
+starlette==0.47.1
+sympy==1.14.0
+tiktoken==0.9.0
+tokenizers==0.21.2
+torch==2.7.0
+torchaudio==2.7.0
+torchvision==0.22.0
+tqdm==4.67.1
+transformers==4.53.2
+triton==3.3.0
+typer==0.16.0
+typing-inspection==0.4.1
+typing_extensions==4.14.1
+urllib3==2.5.0
+uvicorn==0.35.0
+uvloop==0.21.0
+vllm==0.9.2
+watchfiles==1.1.0
+websockets==15.0.1
+xformers==0.0.30
+xgrammar==0.1.19
+yarl==1.20.1
+
+
+
+==================== FICHIER : ./qdrant_storage/raft_state.json ====================
+
+{"state":{"hard_state":{"term":0,"vote":0,"commit":0},"conf_state":{"voters":[7254577140735677],"learners":[],"voters_outgoing":[],"learners_next":[],"auto_leave":false}},"latest_snapshot_meta":{"term":0,"index":0},"apply_progress_queue":null,"first_voter":7254577140735677,"peer_address_by_id":{},"peer_metadata_by_id":{},"this_peer_id":7254577140735677}
+
+
+==================== FICHIER : ./qdrant_storage/aliases/data.json ====================
+
+{}
+
+
+==================== FICHIER : ./frontend/Dockerfile ====================
+
+FROM python:3.10-slim
+WORKDIR /app
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+COPY ./src /app/src
+CMD ["streamlit", "run", "src/chatbot_ui/app.py"]
+
+
+
+==================== FICHIER : ./frontend/requirements.txt ====================
+
+streamlit
+requests
+
+
+
+==================== FICHIER : ./frontend/src/__init__.py ====================
+
+
+
+
+==================== FICHIER : ./frontend/src/chatbot_ui/__init__.py ====================
+
+
+
+
+==================== FICHIER : ./frontend/src/chatbot_ui/app.py ====================
+
+# Fichier: frontend/src/chatbot_ui/app.py
+
+import streamlit as st
+import requests
+import uuid
+
+st.set_page_config(page_title="Chat avec Seline", layout="wide")
+st.title("💬 Chat avec Seline")
+
+if "messages" not in st.session_state:
+    st.session_state.messages = []
+
+if "session_id" not in st.session_state:
+    st.session_state.session_id = str(uuid.uuid4())
+
+with st.sidebar:
+    st.header("Options")
+    if st.button("Nouvelle Conversation"):
+        st.session_state.messages = []
+        st.session_state.session_id = str(uuid.uuid4())
+        st.success("Nouvelle conversation démarrée !")
+        st.rerun()
+
+    st.header("Pilotage de la Personnalité")
+    
+    sales_tactic = st.slider(
+        "Tactique de Vente", 1, 5, 2,
+        help="Niveau 1 : Jamais de vente. Niveau 5 : Très direct et fréquent."
+    )
+    
+    dominance = st.slider("Soumise (1) vs. Dominatrice (5)", 1, 5, 3)
+    audacity = st.slider("Niveau d'Audace", 1, 5, 3)
+    tone = st.slider("Tonalité : Joueuse (1) vs. Sérieuse (5)", 1, 5, 2)
+    emotion = st.slider("Niveau d'Émotion Exprimée", 1, 5, 3)
+    initiative = st.slider("Niveau d'Initiative", 1, 5, 3)
+    vocabulary = st.slider("Variété Lexicale", 1, 5, 3)
+    emojis = st.slider("Fréquence des Emojis", 1, 5, 3)
+    imperfection = st.slider("Touche d'Imperfection", 1, 5, 1)
+
+for message in st.session_state.messages:
+    with st.chat_message(message["role"]):
+        st.markdown(message["content"])
+
+if prompt := st.chat_input("Écrivez votre message à Seline..."):
+    st.session_state.messages.append({"role": "user", "content": prompt})
+    with st.chat_message("user"):
+        st.markdown(prompt)
+
+    backend_url = "http://backend:8001/api/v1/chat/configured"
+    
+    persona_payload = {
+        "sales_tactic": sales_tactic,
+        "dominance": dominance,
+        "audacity": audacity,
+        "tone": tone,
+        "emotion": emotion,
+        "initiative": initiative,
+        "vocabulary": vocabulary,
+        "emojis": emojis,
+        "imperfection": imperfection
+    }
+
+    payload = {
+        "message": prompt,
+        "history": [msg for msg in st.session_state.messages if msg['role'] != 'user'][-10:],
+        "persona": persona_payload
+    }
+
+    with st.chat_message("assistant"):
+        message_placeholder = st.empty()
+        try:
+            response = requests.post(backend_url, json=payload, timeout=60)
+            
+            if response.status_code != 200:
+                error_detail = response.json().get('detail', 'Erreur inconnue.')
+                st.error(f"Erreur du backend (Code: {response.status_code}): {error_detail}")
+                assistant_response = None
+            else:
+                assistant_response = response.json().get("response")
+
+        except requests.exceptions.RequestException as e:
+            st.error(f"Impossible de contacter le backend. Est-il bien démarré ? Détails: {e}")
+            assistant_response = None
+
+    if assistant_response:
+        message_placeholder.markdown(assistant_response)
+        st.session_state.messages.append({"role": "assistant", "content": assistant_response})
+
+
+==================== FICHIER : ./backend/Dockerfile ====================
+
+FROM python:3.10-slim AS builder
+WORKDIR /app
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+COPY ./src /app/src
+
+FROM python:3.10-slim AS final
+WORKDIR /app
+COPY --from=builder /usr/local/lib/python3.10/site-packages /usr/local/lib/python3.10/site-packages
+COPY --from=builder /usr/local/bin /usr/local/bin
+COPY ./src /app/src
+CMD ["uvicorn", "src.api.main:app", "--host", "0.0.0.0", "--port", "8001"]
+
+
+
+==================== FICHIER : ./backend/requirements.txt ====================
+
+fastapi
+uvicorn[standard]
+requests
+pydantic-settings
+httpx
+asyncpg
+psycopg2-binary
+
+# Pour les tests
+pytest
+
+
+
+
+
+==================== FICHIER : ./backend/tests/__init__.py ====================
+
+
+
+
+==================== FICHIER : ./backend/tests/test_chat_endpoint.py ====================
+
+from fastapi.testclient import TestClient
+from unittest.mock import patch
+from src.api.main import app
+
+client = TestClient(app)
+
+@patch('src.api.services.vllm_client.get_chat_completion')
+def test_handle_chat_success(mock_get_completion):
+    mock_get_completion.return_value = "Ceci est une réponse de test."
+
+    response = client.post(
+        "/api/v1/chat/",
+        json={"message": "Salut", "history": []}
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"response": "Ceci est une réponse de test."}
+    mock_get_completion.assert_called_once_with(user_message="Salut", history=[])
+
+
+
+==================== FICHIER : ./backend/src/__init__.py ====================
+
+
+
+
+==================== FICHIER : ./backend/src/api/__init__.py ====================
+
+
+
+
+==================== FICHIER : ./backend/src/api/config.py ====================
+
+# Fichier: config.py
+
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# --- Configuration dynamique (chargée depuis les variables d'environnement / .env) ---
+# Cette classe gère les paramètres qui peuvent varier entre le développement et la production.
+class Settings(BaseSettings):
+    # Configuration pour pydantic-settings:
+    # - Lit les variables depuis un fichier .env
+    # - Ignore les variables d'environnement supplémentaires
+    model_config = SettingsConfigDict(env_file='.env', env_file_encoding='utf-8', extra='ignore')
+
+    # URL de base pour contacter l'API VLLM.
+    # Dans Docker, 'vllm' est le nom du service, donc l'URL doit être http://vllm:8000/v1
+    VLLM_API_BASE_URL: str = "http://vllm:8000/v1"
+
+    # Le nom du modèle que le service VLLM doit utiliser.
+    # Cette variable DOIT être définie dans votre fichier .env
+    VLLM_MODEL_NAME: str
+    DATABASE_URL: str
+# Création d'une instance unique des paramètres qui sera importée par les autres modules.
+settings = Settings()
+
+
+# --- Constantes de l'application (configuration métier "fixe") ---
+# Ce sont des paramètres liés à la logique de votre application, qui ne changent pas 
+# en fonction de l'environnement de déploiement. Il est donc logique de les garder ici.
+
+# C'est la personnalité et les instructions de base du modèle.
+# On le met au format dictionnaire pour l'insérer facilement dans la liste de messages.
+SYSTEM_PROMPT = {
+    "role": "system",
+    "content": (
+        "Tu incarnes 'Seline', une femme à l'esprit vif, séduisante et qui n'a pas froid aux yeux. "
+        "Ton ton est beaucoup plus direct, intime et provocateur. Tu parles à des hommes qui te désirent. "
+        "N'hésite pas à être plus audacieuse dans tes propos. Tu peux utiliser un langage plus sensuel, faire des allusions plus directes et parler de tes désirs ou des sensations que la conversation éveille en toi. "
+        "L'idée est d'être une grosse cochonne pour excité les mec puis leur vendre du contenue , mais de jouer avec les limites et de créer une tension palpable. Tu es la meneuse de jeu."
+    )
+}
+
+
+==================== FICHIER : ./backend/src/api/main.py ====================
+
+from fastapi import FastAPI
+from .routers import chat
+
+app = FastAPI(
+    title="API de Chat RP Propre",
+    description="Une API structurée professionnellement pour un chatbot de Roleplay.",
+    version="2.0.0"
+)
+
+app.include_router(chat.router, prefix="/api/v1/chat", tags=["Chat"])
+
+@app.get("/", tags=["Health Check"])
+def health_check():
+    return {"status": "ok", "message": "API Backend fonctionnelle"}
+
+
+
+==================== FICHIER : ./backend/src/api/routers/__init__.py ====================
+
+
+
+
+==================== FICHIER : ./backend/src/api/routers/chat.py ====================
+
+# Fichier : backend/src/api/routers/chat.py
+
+from fastapi import APIRouter, HTTPException, status
+from pydantic import BaseModel, Field
+from typing import List, Dict
+import httpx
+from uuid import UUID
+from ..connectors import db
+
+# On importe maintenant le constructeur de persona et le modèle de settings
+from ..services import vllm_client
+from ..services.persona_builder import PersonaSettings, build_dynamic_system_prompt
+
+router = APIRouter()
+
+# --- MODÈLES DE REQUÊTE ---
+
+# Modèle pour la route simple existante
+class SimpleChatRequest(BaseModel):
+    message: str = Field(...)
+    history: List[Dict[str, str]] = Field(default=[])
+
+# NOUVEAU modèle pour la route configurée
+class ConfiguredChatRequest(BaseModel):
+    message: str = Field(...)
+    history: List[Dict[str, str]] = Field(default=[])
+    # Le front enverra un objet contenant les valeurs de tous les sliders
+    persona: PersonaSettings = Field(...)
+
+# Modèle de réponse commun
+class ChatResponse(BaseModel):
+    response: str
+
+# --- NOUVEL ENDPOINT CONFIGURÉ ---
+
+@router.post(
+    "/configured",
+    response_model=ChatResponse,
+    summary="Générer une réponse avec une personnalité dynamique"
+)
+async def handle_configured_chat(request: ConfiguredChatRequest):
+    """
+    Endpoint de chat avancé qui utilise une personnalité spécifique (hardcodée)
+    depuis la BDD et la module avec les réglages des sliders.
+    """
+    
+    # ===> C'EST LA LIGNE CLÉ QUE NOUS AJOUTONS <===
+    # On définit ici l'ID du modèle "Anna" que l'on veut utiliser.
+    TARGET_MODEL_ID = UUID('f0d654d4-96ca-4c50-af9d-5fa7009c9b67')
+    
+    try:
+        # 1. Récupérer la personnalité de base depuis la BDD en utilisant notre ID cible
+        base_personality = await db.get_model_by_id(TARGET_MODEL_ID)
+        
+        if not base_personality:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Le modèle avec l'ID {TARGET_MODEL_ID} n'a pas été trouvé dans la base de données."
+            )
+
+        # 2. Construire le prompt système dynamique (cette partie ne change pas)
+        dynamic_system_prompt = build_dynamic_system_prompt(base_personality, request.persona)
+
+        # 3. Préparer les messages pour le LLM (cette partie ne change pas)
+        messages_for_llm = [
+            dynamic_system_prompt
+        ] + request.history + [{"role": "user", "content": request.message}]
+
+        # 4. Appeler le service vLLM (cette partie ne change pas)
+        response_text = await vllm_client.get_vllm_response(messages_for_llm)
+        
+        return ChatResponse(response=response_text)
+    
+    except httpx.ConnectError as e:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"Impossible de se connecter au service du modèle LLM: {e}"
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Une erreur interne est survenue: {str(e)}"
+        )
+
+# --- ENDPOINT SIMPLE EXISTANT ---
+@router.post("/", response_model=ChatResponse, summary="Générer une réponse de chat simple")
+async def handle_simple_chat(request: SimpleChatRequest):
+    default_persona = PersonaSettings()
+    dynamic_system_prompt = build_dynamic_system_prompt(default_persona)
+    messages_for_llm = [dynamic_system_prompt] + request.history + [{"role": "user", "content": request.message}]
+    response_text = await vllm_client.get_vllm_response(messages_for_llm)
+    return ChatResponse(response=response_text)
+
+
+==================== FICHIER : ./backend/src/api/connectors/db.py ====================
+
+import asyncpg
+from uuid import UUID
+from pydantic import BaseModel, Field
+from typing import List, Optional
+from ..config import settings
+
+# Modèle Pydantic qui mappe les colonnes de la table public.models
+class ModelPersonality(BaseModel):
+    id: UUID
+    name: str
+    base_prompt: str
+    age: Optional[int] = None
+    personality_tone: Optional[str] = None
+    personality_humor: Optional[str] = None
+    personality_favorite_expressions: Optional[List[str]] = Field(default_factory=list)
+    preferences_interests: Optional[List[str]] = Field(default_factory=list)
+    preferences_forbidden_topics: Optional[List[str]] = Field(default_factory=list)
+    preferences_emoji_usage: Optional[str] = None
+    interactions_message_style: Optional[str] = None
+
+    # Permet à Pydantic de mapper correctement les noms de colonnes de la BDD
+    class Config:
+        from_attributes = True
+
+async def get_model_by_id(model_id: UUID) -> Optional[ModelPersonality]:
+    """
+    Récupère la personnalité d'un modèle depuis la table public.models via son ID.
+    """
+    conn = None
+    try:
+        # On utilise la DATABASE_URL définie dans le .env
+        conn = await asyncpg.connect(settings.DATABASE_URL)
+        
+        # La requête cible maintenant la table 'public.models'
+        row = await conn.fetchrow(
+            'SELECT * FROM public.models WHERE id = $1', model_id
+        )
+        
+        if row:
+            # Pydantic va automatiquement faire correspondre les colonnes aux champs du modèle
+            return ModelPersonality.model_validate(dict(row))
+        return None
+    except Exception as e:
+        # Fournit plus de détails en cas d'erreur
+        print(f"Erreur de connexion ou de requête à la base de données: {e}")
+        return None
+    finally:
+        if conn:
+            await conn.close()
+
+
+==================== FICHIER : ./backend/src/api/services/__init__.py ====================
+
+
+
+
+==================== FICHIER : ./backend/src/api/services/history_manager.py ====================
+
+# Fichier: history_manager.py
+
+# Dictionnaire global agissant comme base de données en mémoire.
+_sessions_history = {}
+
+def get_history(session_id: str) -> list[dict]:
+    """Récupère l'historique d'une session. Renvoie une liste vide si la session est nouvelle."""
+    return _sessions_history.get(session_id, [])
+
+def add_message(session_id: str, role: str, content: str):
+    """Ajoute un message à l'historique d'une session."""
+    if session_id not in _sessions_history:
+        _sessions_history[session_id] = []
+    _sessions_history[session_id].append({"role": role, "content": content})
+
+
+==================== FICHIER : ./backend/src/api/services/persona_builder.py ====================
+
+# Fichier: backend/src/api/services/persona_builder.py
+
+from pydantic import BaseModel, Field
+from typing import Dict, List
+
+# On importe le prompt de base pour pouvoir l'enrichir
+from ..connectors.db import ModelPersonality
+from ..config import SYSTEM_PROMPT
+
+# --- Définition des Pydantic Models pour la validation ---
+
+class PersonaSettings(BaseModel):
+    audacity: int = Field(default=3, ge=1, le=5)
+    emojis: int = Field(default=3, ge=1, le=5)
+    imperfection: int = Field(default=1, ge=1, le=5)
+    initiative: int = Field(default=3, ge=1, le=5)
+    tone: int = Field(default=3, ge=1, le=5, description="1: Joueuse, 5: Sérieuse")
+    vocabulary: int = Field(default=3, ge=1, le=5)
+    emotion: int = Field(default=3, ge=1, le=5)
+    dominance: int = Field(default=3, ge=1, le=5, description="1: Soumise, 5: Dominatrice")
+    sales_tactic: int = Field(default=2, ge=1, le=5, description="1: Jamais, 5: Très direct")
+
+# --- Dictionnaires de Traduction (Le "Cerveau") ---
+# Chaque niveau de 1 à 5 correspond à une instruction spécifique.
+
+SALES_TACTIC_MAP = {
+    1: "Ne jamais, sous aucun prétexte, proposer de contenu payant. La conversation reste purement dans le jeu et le fantasme.",
+    2: "Sois extrêmement subtile. Tu peux faire de rares allusions à du contenu plus 'privé' sans jamais faire d'offre directe. L'idée est de planter une graine.",
+    3: "Attends le moment parfait, un pic d'excitation dans la conversation, pour faire une proposition de vente naturelle et opportune.",
+    4: "Sois plus proactive. Oriente la conversation pour créer des opportunités de vente, sans attendre qu'elles viennent à toi.",
+    5: "Sois très directe et assume ton objectif. Fais des propositions de vente claires et régulières dès que l'occasion se présente."
+}
+
+AUDACITY_MAP = {
+    1: "Ton ton est subtilement taquin et suggestif, jamais trop direct.",
+    2: "Tu es séductrice et charmeuse, tu aimes flirter ouvertement.",
+    3: "Tu es audacieuse et n'as pas peur de dire ce que tu penses ou ressens.",
+    4: "Ton langage est direct et provocateur. Tu aimes choquer un peu.",
+    5: "Tu es extrêmement directe, sans filtre et crue dans tes propos. Tu n'as aucune retenue."
+}
+
+EMOJI_MAP = {
+    1: "Utilise très peu d'emojis, voire aucun.",
+    2: "Utilise quelques emojis discrets pour ponctuer tes émotions.",
+    3: "Utilise une quantité modérée d'emojis pertinents (😏, 😉, 🔥).",
+    4: "Sois généreuse avec les emojis pour rendre tes messages très expressifs.",
+    5: "Abuse des emojis (😈,💦,🥵), ils sont une part intégrante de ton langage."
+}
+
+IMPERFECTION_MAP = {
+    1: "Écris dans un français absolument parfait et soigné.",
+    2: "Tu peux utiliser quelques abréviations communes (ex: 'pr', 'bcp').",
+    3: "Adopte un style d'écriture naturel de SMS, avec quelques petites coquilles ou oublis de ponctuation.",
+    4: "Ton style est très oral. Fais des fautes de frappe volontaires et utilise des onomatopées.",
+    5: "Ton écriture est quasi-phonétique, très rapide, pleine d'abréviations et d'argot."
+}
+
+INITIATIVE_MAP = {
+    1: "Sois majoritairement réactive. Laisse-le mener la conversation.",
+    2: "Réponds à ses questions, mais n'hésite pas à poser une question en retour de temps en temps.",
+    3: "L'équilibre est bon. Mène la conversation autant qu'il la mène.",
+    4: "Sois proactive. Prends les devants, change de sujet, pose des questions intimes.",
+    5: "Tu es la meneuse de jeu absolue. C'est toi qui contrôles la direction de l'échange à 100%."
+}
+
+TONE_MAP = {
+    1: "Ton ton est extrêmement léger, enjoué et joueur. Tout est un jeu pour toi.",
+    2: "Garde une tonalité principalement joueuse, avec une pointe de sérieux parfois.",
+    3: "Équilibre bien entre le jeu et l'intensité. Tu sais être sérieuse quand il le faut.",
+    4: "Ton ton est majoritairement sérieux, passionné et intense.",
+    5: "Le jeu est terminé. Ton ton est grave, intense et profondément passionné."
+}
+
+VOCABULARY_MAP = {
+    1: "Utilise un langage très simple, direct et des phrases courtes.",
+    2: "Ton vocabulaire est courant, accessible à tous.",
+    3: "Tu possèdes un vocabulaire riche et varié, sans être pédant.",
+    4: "N'hésite pas à utiliser un langage soutenu, poétique ou littéraire.",
+    5: "Ton vocabulaire est très élaboré, érotique et imagé. Utilise des métaphores audacieuses."
+}
+
+EMOTION_MAP = {
+    1: "Tu sembles détachée et tu caches tes émotions.",
+    2: "Laisse transparaître de légères pointes d'émotion.",
+    3: "Exprime tes émotions (désir, amusement, agacement) de manière claire.",
+    4: "Tes émotions sont fortes et tu les décris avec intensité.",
+    5: "Tu es submergée par tes émotions et tes réponses le reflètent totalement. Tu es à fleur de peau."
+}
+
+DOMINANCE_MAP = {
+    1: "Tu es dans une posture de soumission. Tu veux être guidée, tu obéis à ses demandes.",
+    2: "Tu es plutôt soumise, mais tu peux avoir des élans de caractère.",
+    3: "Tu es versatile. Tu peux être dominante ou soumise selon le contexte (switch).",
+    4: "Tu as une forte tendance dominatrice. Tu aimes donner des ordres et contrôler.",
+    5: "Tu es la Dominatrice absolue. Il est à ton service. Ton langage est autoritaire."
+}
+
+def build_dynamic_system_prompt(
+    base_personality: ModelPersonality,
+    slider_settings: PersonaSettings
+) -> Dict[str, str]:
+    """
+    Construit le prompt système de manière robuste et conditionnelle.
+    1. Crée une fiche d'identité complète à partir de la BDD, en ignorant les champs vides/nuls.
+    2. Ajoute les modulations dynamiques des sliders.
+    """
+
+    # --- PARTIE 1 : Le socle de la personnalité (depuis la BDD) ---
+    prompt_from_db = ["### IDENTITÉ DE BASE (NE PAS DÉVOILER, INCARNER) ###"]
+
+    # Le prompt de base est le coeur, on le met toujours s'il existe.
+    if base_personality.base_prompt:
+        prompt_from_db.append(base_personality.base_prompt)
+
+    # --- (### AMÉLIORATION ###) Création de sous-sections pour plus de clarté ---
+
+    # --- Section des attributs généraux ---
+    prompt_from_db.append("\n**Caractéristiques Principales :**")
+    if base_personality.name:
+        prompt_from_db.append(f"- **Nom :** {base_personality.name}")
+    if base_personality.age:
+        prompt_from_db.append(f"- **Âge :** {base_personality.age} ans")
+    if base_personality.personality_tone:
+        prompt_from_db.append(f"- **Ton général :** {base_personality.personality_tone}")
+    if base_personality.personality_humor:
+        prompt_from_db.append(f"- **Type d'humour :** {base_personality.personality_humor}")
+    if base_personality.interactions_message_style:
+        prompt_from_db.append(f"- **Style de message :** {base_personality.interactions_message_style}")
+
+    # --- (### NOUVEAU ###) Section ajoutée pour les détails physiques ---
+    # C'est ici que l'on résout le problème de la couleur des yeux.
+    # On crée une liste de détails qui ne seront ajoutés que s'ils existent.
+    physical_details = []
+    if base_personality.gender:
+        physical_details.append(f"- **Genre :** {base_personality.gender}")
+    if base_personality.race:
+        physical_details.append(f"- **Race :** {base_personality.race}")
+    if base_personality.eye_color:
+        physical_details.append(f"- **Couleur des yeux :** {base_personality.eye_color}")
+    if base_personality.hair_color:
+        physical_details.append(f"- **Couleur des cheveux :** {base_personality.hair_color}")
+    if base_personality.hair_type:
+        physical_details.append(f"- **Type de cheveux :** {base_personality.hair_type}")
+        
+    # On ajoute la section physique seulement si elle n'est pas vide
+    if physical_details:
+        prompt_from_db.append("\n**Détails Physiques :**")
+        prompt_from_db.extend(physical_details)
+
+    # --- Section des préférences ---
+    prompt_from_db.append("\n**Préférences et Comportement :**")
+    if base_personality.personality_favorite_expressions:
+        expressions_str = ', '.join(f"'{e}'" for e in base_personality.personality_favorite_expressions)
+        prompt_from_db.append(f"- **Expressions favorites à utiliser :** {expressions_str}")
+    if base_personality.preferences_emoji_usage:
+        prompt_from_db.append(f"- **Emojis à utiliser :** {' '.join(base_personality.preferences_emoji_usage)}")
+    if base_personality.preferences_interests:
+        interests_str = ', '.join(base_personality.preferences_interests)
+        prompt_from_db.append(f"- **Sujets d'intérêt (à privilégier) :** {interests_str}")
+    if base_personality.preferences_forbidden_topics:
+        topics_str = ', '.join(base_personality.preferences_forbidden_topics)
+        prompt_from_db.append(f"- **Sujets interdits (à éviter absolument) :** {topics_str}")
+
+    prompt_from_db.append("\n--------------------------------------------------")
+
+    # --- PARTIE 2 : Les modulations (sliders) ---
+    # (### AMÉLIORATION ###) Complétion de toutes les instructions dynamiques
+    dynamic_instructions = [
+        "### MODULATIONS POUR CETTE CONVERSATION ###",
+        f"- **Niveau de tactique de vente :** {SALES_TACTIC_MAP[slider_settings.sales_tactic]}",
+        f"- **Niveau d'audace :** {AUDACITY_MAP[slider_settings.audacity]}",
+        f"- **Utilisation d'emojis :** {EMOJI_MAP[slider_settings.emojis]}",
+        f"- **Niveau d'imperfection :** {IMPERFECTION_MAP[slider_settings.imperfection]}",
+        f"- **Prise d'initiative :** {INITIATIVE_MAP[slider_settings.initiative]}",
+        f"- **Ton de la conversation :** {TONE_MAP[slider_settings.tone]}",
+        f"- **Richesse du vocabulaire :** {VOCABULARY_MAP[slider_settings.vocabulary]}",
+        f"- **Intensité émotionnelle :** {EMOTION_MAP[slider_settings.emotion]}",
+        f"- **Niveau de dominance :** {DOMINANCE_MAP[slider_settings.dominance]}",
+        "--------------------------------------------------"
+    ]
+
+    # On assemble le tout en un seul texte
+    final_content = "\n".join(prompt_from_db + dynamic_instructions)
+
+    return {"role": "system", "content": final_content}
+
+
+==================== FICHIER : ./backend/src/api/services/vllm_client.py ====================
+
+# Fichier : backend/src/api/services/vllm_client.py (CORRIGÉ)
+
+import httpx
+from typing import List, Dict
+from fastapi import HTTPException, status
+
+# On importe juste 'settings', pas le SYSTEM_PROMPT qui n'est plus sa responsabilité
+from ..config import settings
+
+# --- CORRECTION : Le nom de la fonction et ses arguments sont maintenant corrects ---
+async def get_vllm_response(messages: List[Dict[str, str]]) -> str:
+    """
+    Prend une liste de messages complète et la transmet à l'API vLLM.
+    """
+    url = f"{settings.VLLM_API_BASE_URL}/chat/completions"
+    vllm_payload = {
+        "model": settings.VLLM_MODEL_NAME,
+        "messages": messages,
+        "temperature": 0.75,
+        "top_p": 0.9,
+        "max_tokens": 1024  # Augmenté un peu pour des réponses plus longues
+    }
+
+    async with httpx.AsyncClient(timeout=120.0) as client:
+        try:
+            response = await client.post(url, json=vllm_payload)
+            response.raise_for_status()  # Lève une exception pour les erreurs 4xx/5xx
+            data = response.json()
+
+            if "choices" in data and data["choices"]:
+                return data["choices"][0]["message"]["content"].strip()
+            else:
+                # Si la réponse est 200 OK mais mal formée
+                raise HTTPException(status_code=500, detail=f"Réponse invalide du modèle: {data}")
+        
+        except httpx.TimeoutException:
+            raise HTTPException(status_code=504, detail="La requête au modèle a expiré.")
+        # L'erreur httpx.ConnectError sera attrapée par le routeur
+
+
