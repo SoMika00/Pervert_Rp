@@ -1,92 +1,86 @@
-# Fichier : backend/src/api/routers/chat.py
+# Fichier: ./backend/src/api/routers/chat.py (Final et Complet)
 
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, Field
 from typing import List, Dict
-import httpx
 from uuid import UUID
-from ..connectors import db
+import httpx
 
-# On importe maintenant le constructeur de persona et le modèle de settings
+from ..connectors import db
 from ..services import vllm_client
-from ..services.persona_builder import PersonaSettings, build_dynamic_system_prompt
+from ..services.persona_builder import build_dynamic_system_prompt
 
 router = APIRouter()
 
-# --- MODÈLES DE REQUÊTE ---
+# --- Modèles Pydantic pour la validation des données entrantes et sortantes ---
 
-# Modèle pour la route simple existante
-class SimpleChatRequest(BaseModel):
-    message: str = Field(...)
-    history: List[Dict[str, str]] = Field(default=[])
+class ChatRequest(BaseModel):
+    model_id: UUID = Field(..., description="L'ID de la personnalité à utiliser pour la conversation.")
+    session_id: UUID = Field(..., description="L'ID de la session de chat actuelle pour regrouper les logs.")
+    message: str = Field(..., description="Le message textuel de l'utilisateur.")
+    history: List[Dict[str, str]] = Field(default=[], description="L'historique des derniers échanges pour le contexte.")
 
-# NOUVEAU modèle pour la route configurée
-class ConfiguredChatRequest(BaseModel):
-    message: str = Field(...)
-    history: List[Dict[str, str]] = Field(default=[])
-    # Le front enverra un objet contenant les valeurs de tous les sliders
-    persona: PersonaSettings = Field(...)
-
-# Modèle de réponse commun
 class ChatResponse(BaseModel):
     response: str
 
-# --- NOUVEL ENDPOINT CONFIGURÉ ---
+# --- Endpoint principal de la conversation ---
 
 @router.post(
-    "/configured",
+    "/",
     response_model=ChatResponse,
-    summary="Générer une réponse avec une personnalité dynamique"
+    summary="Générer une réponse de chat et enregistrer l'interaction"
 )
-async def handle_configured_chat(request: ConfiguredChatRequest):
+async def handle_chat(request: ChatRequest):
     """
-    Endpoint de chat avancé qui utilise une personnalité spécifique (hardcodée)
-    depuis la BDD et la module avec les réglages des sliders.
+    Prend en charge une requête de chat pour un modèle de personnalité spécifique.
+    Le processus est le suivant :
+    1. Récupère la personnalité complète depuis la base de données via son ID.
+    2. Construit le prompt système dynamique en utilisant les données de la personnalité.
+    3. Appelle le service vLLM externe pour obtenir une réponse textuelle.
+    4. Enregistre l'interaction (message utilisateur et réponse IA) dans la base de données.
     """
-    
-    # ===> C'EST LA LIGNE CLÉ QUE NOUS AJOUTONS <===
-    # On définit ici l'ID du modèle "Anna" que l'on veut utiliser.
-    TARGET_MODEL_ID = UUID('f0d654d4-96ca-4c50-af9d-5fa7009c9b67')
-    
     try:
-        # 1. Récupérer la personnalité de base depuis la BDD en utilisant notre ID cible
-        base_personality = await db.get_model_by_id(TARGET_MODEL_ID)
-        
-        if not base_personality:
+        # Étape 1: Récupérer la personnalité depuis la BDD
+        personality = await db.get_model_by_id(request.model_id)
+        if not personality:
+            # Si le modèle n'est pas trouvé, il est impossible de continuer.
             raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Le modèle avec l'ID {TARGET_MODEL_ID} n'a pas été trouvé dans la base de données."
+                status_code=status.HTTP_404_NOT_FOUND, 
+                detail=f"La personnalité avec l'ID {request.model_id} n'a pas été trouvée."
             )
 
-        # 2. Construire le prompt système dynamique (cette partie ne change pas)
-        dynamic_system_prompt = build_dynamic_system_prompt(base_personality, request.persona)
+        # Étape 2: Construire le prompt système dynamique
+        system_prompt = build_dynamic_system_prompt(personality)
+        
+        # Préparer la liste complète de messages pour le LLM
+        messages_for_llm = [system_prompt] + request.history + [{"role": "user", "content": request.message}]
 
-        # 3. Préparer les messages pour le LLM (cette partie ne change pas)
-        messages_for_llm = [
-            dynamic_system_prompt
-        ] + request.history + [{"role": "user", "content": request.message}]
-
-        # 4. Appeler le service vLLM (cette partie ne change pas)
+        # Étape 3: Appeler le service vLLM pour obtenir une réponse
         response_text = await vllm_client.get_vllm_response(messages_for_llm)
         
+        # Étape 4: Enregistrer l'interaction dans les logs
+        await db.log_chat_interaction(
+            session_id=request.session_id,
+            model_id=request.model_id,
+            user_message=request.message,
+            assistant_response=response_text
+        )
+        
         return ChatResponse(response=response_text)
-    
+
     except httpx.ConnectError as e:
+        # Erreur spécifique si le service vLLM n'est pas joignable.
         raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=f"Impossible de se connecter au service du modèle LLM: {e}"
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, 
+            detail=f"Impossible de se connecter au service du modèle LLM (vLLM): {e}"
         )
     except Exception as e:
+        # Gestionnaire générique pour toutes les autres erreurs.
+        if isinstance(e, HTTPException):
+            raise e # Si c'est déjà une erreur HTTP (comme notre 404), on la propage.
+        
+        print(f"ERREUR INATTENDUE dans handle_chat: {e}") # Log pour le débogage serveur
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Une erreur interne est survenue: {str(e)}"
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, 
+            detail=f"Une erreur interne inattendue est survenue: {str(e)}"
         )
-
-# --- ENDPOINT SIMPLE EXISTANT ---
-@router.post("/", response_model=ChatResponse, summary="Générer une réponse de chat simple")
-async def handle_simple_chat(request: SimpleChatRequest):
-    default_persona = PersonaSettings()
-    dynamic_system_prompt = build_dynamic_system_prompt(default_persona)
-    messages_for_llm = [dynamic_system_prompt] + request.history + [{"role": "user", "content": request.message}]
-    response_text = await vllm_client.get_vllm_response(messages_for_llm)
-    return ChatResponse(response=response_text)

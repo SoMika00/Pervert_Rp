@@ -1,66 +1,132 @@
+# Fichier: ./backend/src/api/connectors/db.py (Finalisé)
+
 import asyncpg
 from uuid import UUID
 from pydantic import BaseModel, Field
 from typing import List, Optional
 from ..config import settings
 
-# Modèle Pydantic qui mappe TOUTES les colonnes nécessaires de la table public.models
+# --- MODÈLES PYDANTIC ---
+
 class ModelPersonality(BaseModel):
     id: UUID
     name: str
-    base_prompt: str
-    age: Optional[int] = None
-    
-    # --- AJOUT DES CHAMPS PHYSIQUES MANQUANTS ---
-    # On les déclare comme Optionnels pour que tout fonctionne même si
-    # la valeur est nulle dans la base de données.
+    language: str
+    prompt_additions: Optional[str] = None
     gender: Optional[str] = None
     race: Optional[str] = None
     eye_color: Optional[str] = None
     hair_color: Optional[str] = None
-    hair_type: Optional[str] = None
-    
-    # --- Champs de personnalité existants ---
-    personality_tone: Optional[str] = None
-    personality_humor: Optional[str] = None
-    personality_favorite_expressions: Optional[List[str]] = Field(default_factory=list)
-    
-    # --- Champs de préférences existants ---
-    preferences_interests: Optional[List[str]] = Field(default_factory=list)
-    preferences_forbidden_topics: Optional[List[str]] = Field(default_factory=list)
-    # Note: Dans votre BDD, 'preferences_emoji_usage' ressemble à une liste, mais est 'str' ici.
-    # Je conserve 'str' pour respecter votre code original.
-    preferences_emoji_usage: Optional[str] = None 
-    
-    # --- Champ de style d'interaction existant ---
-    interactions_message_style: Optional[str] = None
+    hair_style: Optional[str] = None
+    body_type: Optional[str] = None
+    clothing_style: Optional[str] = None
+    distinguishing_features: Optional[str] = None
+    libido_level: int
+    intelligence_level: int
+    dominance: int
+    audacity: int
+    tone: int
+    emotion: int
+    initiative: int
+    vocabulary: int
+    emojis: int
+    imperfection: int
+    class Config: from_attributes = True
 
-    # Permet à Pydantic de mapper correctement les noms de colonnes de la BDD
-    class Config:
-        from_attributes = True # Pour Pydantic v2. Si v1, utilisez orm_mode = True
+class CreateModelRequest(BaseModel):
+    name: str = Field(..., min_length=3, max_length=100)
+    language: str = Field(default='fr')
+    prompt_additions: Optional[str] = None
+    gender: Optional[str] = None
+    race: Optional[str] = None
+    eye_color: Optional[str] = None
+    hair_color: Optional[str] = None
+    hair_style: Optional[str] = None
+    body_type: Optional[str] = None
+    clothing_style: Optional[str] = None
+    distinguishing_features: Optional[str] = None
+    libido_level: int = Field(default=3, ge=1, le=5)
+    intelligence_level: int = Field(default=3, ge=1, le=5)
+    dominance: int = Field(default=3, ge=1, le=5)
+    audacity: int = Field(default=3, ge=1, le=5)
+    tone: int = Field(default=2, ge=1, le=5)
+    emotion: int = Field(default=3, ge=1, le=5)
+    initiative: int = Field(default=3, ge=1, le=5)
+    vocabulary: int = Field(default=3, ge=1, le=5)
+    emojis: int = Field(default=3, ge=1, le=5)
+    imperfection: int = Field(default=1, ge=1, le=5)
+
+class UpdateModelNameRequest(BaseModel):
+    name: str = Field(..., min_length=3, max_length=100)
+
+class ModelInfo(BaseModel):
+    id: UUID
+    name: str
+
+# --- FONCTIONS BDD ---
+
+async def get_db_connection():
+    try:
+        return await asyncpg.connect(settings.DATABASE_URL)
+    except asyncpg.PostgresError as e:
+        print(f"Erreur critique de connexion à la base de données: {e}")
+        raise
 
 async def get_model_by_id(model_id: UUID) -> Optional[ModelPersonality]:
-    """
-    Récupère la personnalité d'un modèle depuis la table public.models via son ID.
-    """
+    conn = await get_db_connection()
+    try:
+        row = await conn.fetchrow('SELECT * FROM public.models WHERE id = $1', model_id)
+        return ModelPersonality.model_validate(dict(row)) if row else None
+    finally:
+        await conn.close()
+
+async def list_models() -> List[ModelInfo]:
+    conn = await get_db_connection()
+    try:
+        rows = await conn.fetch('SELECT id, name FROM public.models ORDER BY name')
+        return [ModelInfo(id=row['id'], name=row['name']) for row in rows]
+    finally:
+        await conn.close()
+
+async def create_model(model_data: CreateModelRequest) -> ModelPersonality:
+    conn = await get_db_connection()
+    try:
+        query = """
+            INSERT INTO public.models (
+                name, language, prompt_additions, gender, race, eye_color, hair_color, hair_style,
+                body_type, clothing_style, distinguishing_features,
+                libido_level, intelligence_level, dominance, audacity, tone, emotion,
+                initiative, vocabulary, emojis, imperfection
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
+                      $14, $15, $16, $17, $18, $19, $20, $21)
+            RETURNING *
+        """
+        row = await conn.fetchrow(query, *model_data.model_dump().values())
+        return ModelPersonality.model_validate(dict(row))
+    except asyncpg.UniqueViolationError:
+        raise ValueError(f"Une personnalité avec le nom '{model_data.name}' existe déjà.")
+    finally:
+        await conn.close()
+
+async def update_model_name(model_id: UUID, new_name: str) -> Optional[ModelPersonality]:
+    conn = await get_db_connection()
+    try:
+        query = "UPDATE public.models SET name = $1 WHERE id = $2 RETURNING *"
+        row = await conn.fetchrow(query, new_name, model_id)
+        return ModelPersonality.model_validate(dict(row)) if row else None
+    except asyncpg.UniqueViolationError:
+        raise ValueError(f"Une personnalité avec le nom '{new_name}' existe déjà.")
+    finally:
+        await conn.close()
+
+async def log_chat_interaction(session_id: UUID, model_id: UUID, user_message: str, assistant_response: str) -> None:
     conn = None
     try:
-        # On utilise la DATABASE_URL définie dans le .env
-        conn = await asyncpg.connect(settings.DATABASE_URL)
-        
-        # La requête cible maintenant la table 'public.models'
-        row = await conn.fetchrow(
-            'SELECT * FROM public.models WHERE id = $1', model_id
-        )
-        
-        if row:
-            # Pydantic va maintenant mapper TOUS les champs, y compris les nouveaux
-            return ModelPersonality.model_validate(dict(row))
-        return None
+        conn = await get_db_connection()
+        query = "INSERT INTO public.chat_logs (session_id, model_id, user_message, assistant_response) VALUES ($1, $2, $3, $4)"
+        await conn.execute(query, session_id, model_id, user_message, assistant_response)
     except Exception as e:
-        # Fournit plus de détails en cas d'erreur
-        print(f"Erreur de connexion ou de requête à la base de données: {e}")
-        return None
+        print(f"ATTENTION : Échec de l'enregistrement du log de chat. Erreur: {e}")
     finally:
         if conn:
             await conn.close()
